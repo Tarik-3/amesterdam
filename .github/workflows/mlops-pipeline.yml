@@ -7,7 +7,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  run-ml-pipeline:
+  preprocessing:
+    name: Data Preprocessing
     runs-on: ubuntu-latest
 
     steps:
@@ -18,6 +19,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: 'pip'
 
       - name: Install dependencies
         run: |
@@ -25,25 +27,200 @@ jobs:
           pip install -r requirements.txt
           pip install nbconvert
 
-      - name: Run preprocessing notebooks
+      - name: Run demographic preprocessing
         run: |
           jupyter nbconvert --to notebook --execute --inplace PREPROCESSING/demographic.ipynb --ExecutePreprocessor.timeout=600 --ExecutePreprocessor.cwd=PREPROCESSING
+
+      - name: Run students preprocessing
+        run: |
           jupyter nbconvert --to notebook --execute --inplace PREPROCESSING/students.ipynb --ExecutePreprocessor.timeout=600 --ExecutePreprocessor.cwd=PREPROCESSING
+
+      - name: Run subsidies preprocessing
+        run: |
           jupyter nbconvert --to notebook --execute --inplace PREPROCESSING/subsidies.ipynb --ExecutePreprocessor.timeout=600 --ExecutePreprocessor.cwd=PREPROCESSING
 
-      - name: Run modeling notebooks
-        run: |
-          jupyter nbconvert --to notebook --execute --inplace MODEL/forecasting_demographic.ipynb --ExecutePreprocessor.timeout=900 --ExecutePreprocessor.cwd=MODEL
-          jupyter nbconvert --to notebook --execute --inplace MODEL/forecasting_students.ipynb --ExecutePreprocessor.timeout=900 --ExecutePreprocessor.cwd=MODEL
-          jupyter nbconvert --to notebook --execute --inplace MODEL/forecasting_subsidies.ipynb --ExecutePreprocessor.timeout=900 --ExecutePreprocessor.cwd=MODEL
-
-      - name: Validate outputs
-        run: python ci/validate_outputs.py
-
-      - name: Upload artifacts
+      - name: Upload preprocessed data
         uses: actions/upload-artifact@v4
         with:
-          name: ml-artifacts
+          name: preprocessed-data
+          path: data_clean/*.csv
+          retention-days: 1
+
+  modeling-demographic:
+    name: Forecast Demographics
+    runs-on: ubuntu-latest
+    needs: preprocessing
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install nbconvert
+
+      - name: Download preprocessed data
+        uses: actions/download-artifact@v4
+        with:
+          name: preprocessed-data
+          path: data_clean
+
+      - name: Run demographic forecasting
+        run: |
+          jupyter nbconvert --to notebook --execute --inplace MODEL/forecasting_demographic.ipynb --ExecutePreprocessor.timeout=900 --ExecutePreprocessor.cwd=MODEL
+
+      - name: Upload demographic forecast
+        uses: actions/upload-artifact@v4
+        with:
+          name: forecast-demographic
+          path: TRANSFORMATION/forecast_demographic.csv
+          retention-days: 1
+
+  modeling-students:
+    name: Forecast Students
+    runs-on: ubuntu-latest
+    needs: preprocessing
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install nbconvert
+
+      - name: Download preprocessed data
+        uses: actions/download-artifact@v4
+        with:
+          name: preprocessed-data
+          path: data_clean
+
+      - name: Run students forecasting
+        run: |
+          jupyter nbconvert --to notebook --execute --inplace MODEL/forecasting_students.ipynb --ExecutePreprocessor.timeout=900 --ExecutePreprocessor.cwd=MODEL
+
+  modeling-subsidies:
+    name: Forecast Subsidies
+    runs-on: ubuntu-latest
+    needs: preprocessing
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install nbconvert
+
+      - name: Download preprocessed data
+        uses: actions/download-artifact@v4
+        with:
+          name: preprocessed-data
+          path: data_clean
+
+      - name: Run subsidies forecasting
+        run: |
+          jupyter nbconvert --to notebook --execute --inplace MODEL/forecasting_subsidies.ipynb --ExecutePreprocessor.timeout=900 --ExecutePreprocessor.cwd=MODEL
+
+      - name: Upload subsidy forecast
+        uses: actions/upload-artifact@v4
+        with:
+          name: forecast-subsidies
+          path: TRANSFORMATION/forecast_subsidy_final.csv
+          retention-days: 1
+
+  validate:
+    name: Validate Outputs
+    runs-on: ubuntu-latest
+    needs: [modeling-demographic, modeling-students, modeling-subsidies]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pandas
+        run: pip install pandas
+
+      - name: Download preprocessed data
+        uses: actions/download-artifact@v4
+        with:
+          name: preprocessed-data
+          path: data_clean
+
+      - name: Download demographic forecast
+        uses: actions/download-artifact@v4
+        with:
+          name: forecast-demographic
+          path: TRANSFORMATION
+
+      - name: Download subsidy forecast
+        uses: actions/download-artifact@v4
+        with:
+          name: forecast-subsidies
+          path: TRANSFORMATION
+
+      - name: Run validation
+        run: python ci/validate_outputs.py
+
+  publish-artifacts:
+    name: Publish ML Artifacts
+    runs-on: ubuntu-latest
+    needs: validate
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Download preprocessed data
+        uses: actions/download-artifact@v4
+        with:
+          name: preprocessed-data
+          path: data_clean
+
+      - name: Download demographic forecast
+        uses: actions/download-artifact@v4
+        with:
+          name: forecast-demographic
+          path: TRANSFORMATION
+
+      - name: Download subsidy forecast
+        uses: actions/download-artifact@v4
+        with:
+          name: forecast-subsidies
+          path: TRANSFORMATION
+
+      - name: Upload final artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ml-pipeline-outputs
           path: |
             data_clean/*.csv
             TRANSFORMATION/*.csv
+          retention-days: 30
